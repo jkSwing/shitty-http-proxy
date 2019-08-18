@@ -8,7 +8,43 @@
 // #pragma comment (lib, "AdvApi32.lib")
 
 #define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "443"
+#define DEFAULT_PORT "22333"
+
+
+int get_line(SOCKET s, char* buff, int len)
+{
+	char c = '\0';
+	int i = 0;
+	while (i < len - 1 && c != '\n')
+	{
+		int iResult = recv(s, &c, 1, 0);
+		if (iResult > 0)
+		{
+			if (c == '\r')
+			{
+				buff[i++] = '\r';
+				iResult = recv(s, &c, 1, MSG_PEEK);
+				// read the \n and break the loop
+				if (iResult > 0 && c == '\n')
+				{
+					recv(s, &c, 1, 0);
+				}
+				// read null or sth else, break the loop
+				else
+				{
+					c = '\n';
+				}
+			}
+		}
+		// cannot read, break the loop 
+		else
+		{
+			c = '\n';
+		}
+		buff[i++] = c;
+	}
+	return i;
+}
 
 void fatal_error(const char *error_msg, SOCKET socket = INVALID_SOCKET, struct addrinfo *result = NULL)
 {
@@ -74,6 +110,7 @@ SOCKET open_listen_socket(const char *port)
 	return ListenSocket;
 }
 
+
 int main(int argc, char **argv)
 {
 	WSADATA wsaData;
@@ -97,23 +134,36 @@ int main(int argc, char **argv)
 		}
 
 		// Receive until the peer shuts down the connection
-		char recvbuf[DEFAULT_BUFLEN];
+		char recvbuf[DEFAULT_BUFLEN] = { 0 };
 		int recvbuflen = DEFAULT_BUFLEN;
-		do {
+		int readLen = 0;
+		iResult = 0;
 
-			iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
-			if (iResult > 0) {
-				printf("%d bytes received\n", iResult);
-				printf("raw data:\n%s\n", recvbuf);
-				fflush(stdout);
-			}
-			else if (iResult == 0)
-				printf("Connection closing...\n");
-			else {
-				fatal_error("recv failed", ClientSocket);
-			}
+		// break if read an empty line
+		do
+		{
+			readLen += iResult;
+			iResult = get_line(ClientSocket, recvbuf + readLen, DEFAULT_BUFLEN - readLen);
+		} while (iResult > 0 && strcmp(recvbuf + readLen, "\r\n") != 0);
 
-		} while (iResult > 0);
+		printf("%s", recvbuf);
+		
+
+		// todo: connect to the destination
+
+		// todo: send the data back to client
+		// send a constant content
+		char buff[] = "HTTP/1.0 200 OK\r\n"
+			"Server: Apache Tomcat/5.0.12\r\n"
+			"Content-Type: text/html;charset=UTF-8\r\n"
+			"Content-Length: 17\r\n"
+			"\r\n"
+			"<h1>REPLIED</h1>";
+		iResult = send(ClientSocket, buff, sizeof(buff), 0);
+		if (iResult < 0)
+		{
+			fatal_error("send failed", ClientSocket);
+		}
 
 		// shutdown the connection since we're done
 		iResult = shutdown(ClientSocket, SD_SEND);
