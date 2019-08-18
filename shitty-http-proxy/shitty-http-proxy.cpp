@@ -1,50 +1,4 @@
-#include <iostream>
-#include <cstdio>
-#include <ws2tcpip.h>
-#include <winsock2.h>
-
-#pragma comment(lib, "Ws2_32.lib")
-// #pragma comment (lib, "Mswsock.lib")
-// #pragma comment (lib, "AdvApi32.lib")
-
-#define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "22333"
-
-
-int get_line(SOCKET s, char* buff, int len)
-{
-	char c = '\0';
-	int i = 0;
-	while (i < len - 1 && c != '\n')
-	{
-		int iResult = recv(s, &c, 1, 0);
-		if (iResult > 0)
-		{
-			if (c == '\r')
-			{
-				buff[i++] = '\r';
-				iResult = recv(s, &c, 1, MSG_PEEK);
-				// read the \n and break the loop
-				if (iResult > 0 && c == '\n')
-				{
-					recv(s, &c, 1, 0);
-				}
-				// read null or sth else, break the loop
-				else
-				{
-					c = '\n';
-				}
-			}
-		}
-		// cannot read, break the loop 
-		else
-		{
-			c = '\n';
-		}
-		buff[i++] = c;
-	}
-	return i;
-}
+#include <shitty-http-proxy.h>
 
 void fatal_error(const char *error_msg, SOCKET socket = INVALID_SOCKET, struct addrinfo *result = NULL)
 {
@@ -55,6 +9,69 @@ void fatal_error(const char *error_msg, SOCKET socket = INVALID_SOCKET, struct a
 	system("pause");
 	exit(1);
 }
+
+// buffer store the data received from 'socket'
+struct ShitBuffer
+{
+	char buffer[DEFAULT_BUFLEN] = {0};
+	char *cur = buffer, *end = buffer;
+	SOCKET socket;
+
+	ShitBuffer(SOCKET socket): socket(socket) {}
+	int read(char *user_buffer, int len, int flags)
+	{
+		int read_cnt = 0;
+		while (read_cnt < len)
+		{
+			if (cur == end)  // if no new data
+			{
+				int iResult = recv(socket, buffer, DEFAULT_BUFLEN, 0);
+				if (iResult == SOCKET_ERROR) return SOCKET_ERROR;
+				if (iResult == 0) return read_cnt;
+
+				cur = buffer; end = buffer + iResult;
+			}
+			user_buffer[read_cnt++] = *cur;
+			if (!(flags & MSG_PEEK)) ++cur;
+		}
+		return read_cnt;
+	}
+	int get_line(char *buff, int len)
+	{
+		char c = '\0';
+		int i = 0;
+		while (i < len - 1 && c != '\n')
+		{
+			int iResult = read(&c, 1, 0);
+			if (iResult > 0)
+			{
+				if (c == '\r')
+				{
+					buff[i++] = '\r';
+					iResult = read(&c, 1, MSG_PEEK);
+					// read the \n and break the loop
+					if (iResult > 0 && c == '\n')
+					{
+						read(&c, 1, 0);
+					}
+					// read null or sth else, break the loop
+					else
+					{
+						c = '\n';
+					}
+				}
+			}
+			// cannot read, break the loop 
+			else
+			{
+				if (iResult == SOCKET_ERROR) fatal_error("socket error", socket);
+				c = '\n';
+			}
+			buff[i++] = c;
+		}
+		return i;
+	}
+};
 
 SOCKET open_listen_socket(const char *port)
 {
@@ -134,8 +151,8 @@ int main(int argc, char **argv)
 		}
 
 		// Receive until the peer shuts down the connection
+		ShitBuffer shit_buffer(ClientSocket);
 		char recvbuf[DEFAULT_BUFLEN] = { 0 };
-		int recvbuflen = DEFAULT_BUFLEN;
 		int readLen = 0;
 		iResult = 0;
 
@@ -143,7 +160,7 @@ int main(int argc, char **argv)
 		do
 		{
 			readLen += iResult;
-			iResult = get_line(ClientSocket, recvbuf + readLen, DEFAULT_BUFLEN - readLen);
+			iResult = shit_buffer.get_line(recvbuf + readLen, DEFAULT_BUFLEN - readLen);
 		} while (iResult > 0 && strcmp(recvbuf + readLen, "\r\n") != 0);
 
 		printf("%s", recvbuf);
