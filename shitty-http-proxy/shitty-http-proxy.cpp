@@ -36,42 +36,78 @@ struct ShitBuffer
 		}
 		return read_cnt;
 	}
-	int get_line(char *buff, int len)
+	int get_line(char *buff, int len)  // maybe need refactor
 	{
 		char c = '\0';
-		int i = 0;
-		while (i < len - 1 && c != '\n')
+		int read_cnt = 0;
+		while (read_cnt < len - 1 && c != '\n')
 		{
 			int iResult = read(&c, 1, 0);
-			if (iResult > 0)
-			{
-				if (c == '\r')
-				{
-					buff[i++] = '\r';
-					iResult = read(&c, 1, MSG_PEEK);
-					// read the \n and break the loop
-					if (iResult > 0 && c == '\n')
-					{
-						read(&c, 1, 0);
-					}
-					// read null or sth else, break the loop
-					else
-					{
-						c = '\n';
-					}
-				}
-			}
 			// cannot read, break the loop 
-			else
+			if (iResult <= 0)
 			{
 				if (iResult == SOCKET_ERROR) fatal_error("socket error", socket);
-				c = '\n';
+				break;
 			}
-			buff[i++] = c;
+			buff[read_cnt++] = c;
 		}
-		return i;
+		buff[read_cnt] = 0;
+		return read_cnt;
 	}
 };
+
+struct Meta
+{
+	std::string method;
+	std::string host;
+	std::string path;
+	std::string user_agent;
+	int content_length = 0;
+	std::string content;
+};
+
+void parse_line(Meta &meta, char line[])
+{
+	std::string buf;
+	std::istringstream is(std::string{line});
+	is >> buf;
+	if (buf.empty()) return;
+	if (buf.back() == ':') buf.pop_back();
+
+	if (buf == "GET")
+	{
+		meta.method = buf;
+		is >> meta.path;
+	}
+	else if (buf == "Host")
+	{
+		is >> meta.host;
+	}
+	else if (buf == "User-Agent")
+	{
+		is.get();  // eat white space
+		std::getline(is, meta.user_agent);
+	}
+}
+
+int build_request(char request[], const Meta &meta)
+{
+	if (meta.method.empty()) return BAD_REQUEST;
+	if (meta.path.empty()) return BAD_REQUEST;
+	if (meta.host.empty()) return BAD_REQUEST;
+	std::string format = "%s %s HTTP/1.0\r\n"
+		"Host: %s\r\n"
+		"Connection: close\r\n"
+		"Proxy-Connection: close\r\n"
+		"User-Agent: %s\r\n";
+	if (meta.content_length > 0) format += "Content-Length: %d\r\n"
+											"\r\n"
+											"%s";
+	format += "\r\n";
+	sprintf_s(request, DEFAULT_BUFLEN, format.c_str(), meta.method.c_str(), meta.path.c_str(),
+			meta.host.c_str(), meta.user_agent.c_str(), meta.content_length, meta.content.c_str());
+	return 0;
+}
 
 SOCKET open_listen_socket(const char *port)
 {
@@ -152,18 +188,22 @@ int main(int argc, char **argv)
 
 		// Receive until the peer shuts down the connection
 		ShitBuffer shit_buffer(ClientSocket);
+		Meta meta;
 		char recvbuf[DEFAULT_BUFLEN] = { 0 };
 		int readLen = 0;
-		iResult = 0;
 
 		// break if read an empty line
 		do
 		{
-			readLen += iResult;
-			iResult = shit_buffer.get_line(recvbuf + readLen, DEFAULT_BUFLEN - readLen);
-		} while (iResult > 0 && strcmp(recvbuf + readLen, "\r\n") != 0);
+			iResult = shit_buffer.get_line(recvbuf, DEFAULT_BUFLEN);
+			if (iResult <= 0 || strcmp(recvbuf, "\r\n") == 0) break;
+			parse_line(meta, recvbuf);
+		} while (true);
 
-		printf("%s", recvbuf);
+		char request[DEFAULT_BUFLEN] = {0};
+		build_request(request, meta);
+		printf("%s", request);
+		// printf("%s", recvbuf);
 		
 
 		// todo: connect to the destination
