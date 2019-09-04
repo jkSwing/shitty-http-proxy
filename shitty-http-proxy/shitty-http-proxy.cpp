@@ -120,8 +120,8 @@ int build_request(char request[], const HttpMsg &meta)
 		"Host: %s\r\n"
 		"Connection: close\r\n"
 		"Proxy-Connection: close\r\n"
-		"User-Agent: %s\r\n"
-		"%s";	// meta.others has "\r\n"
+		"User-Agent: %s\r\n";
+		// "%s";	// meta.others has "\r\n"
 	if (meta.content_length > 0)
 	{
 		format += "Content-Length: %d\r\n"
@@ -130,7 +130,7 @@ int build_request(char request[], const HttpMsg &meta)
 	}
 	format += "\r\n";
 	sprintf_s(request, DEFAULT_BUFLEN, format.c_str(), meta.method.c_str(), meta.path.c_str(),
-			meta.host.c_str(), meta.user_agent.c_str(), meta.others.c_str(), meta.content_length,
+			meta.host.c_str(), meta.user_agent.c_str(), /*meta.others.c_str(),*/ meta.content_length,
 			meta.content.c_str());
 	return 0;
 }
@@ -307,21 +307,21 @@ int main(int argc, char **argv)
 		{
 			goto ShutDownClient;
 		}
-		printf("%s", request);
+		printf("===request===\n%s", request);
 
 		
 		
 
 		// connect to the destination
 		char response[DEFAULT_RESPONSE_LEN] = { 0 };
-		SOCKET desSock = connect_to_destination(meta);
+		SOCKET dstSock = connect_to_destination(meta);
 		int readLen = 0;
 
-		iResult = send(desSock, request, strlen(request) + 1, 0);
+		iResult = send(dstSock, request, sizeof(request), 0);
 		while (true)
 		{
 			int iResult;
-			iResult = recv(desSock, response + readLen, DEFAULT_RESPONSE_LEN - readLen, 0);
+			iResult = recv(dstSock, response + readLen, DEFAULT_RESPONSE_LEN - readLen, 0);
 			if (iResult > 0)
 			{
 				readLen += iResult;
@@ -331,11 +331,11 @@ int main(int argc, char **argv)
 				break;
 			}
 		}
-		printf("%s", response);
+		printf("===respons===\n%s", response);
 
 
 		// send the data back to client
-		send(ClientSocket, response, strlen(response) + 1, 0);
+		send(ClientSocket, response, sizeof(response), 0);
 
 		// send a constant content
 		// char buff[] = "HTTP/1.0 200 OK\r\n"
@@ -349,6 +349,12 @@ int main(int argc, char **argv)
 		// {
 		// 	fatal_error("send failed", ClientSocket);
 		// }
+
+		iResult = shutdown(dstSock, SD_SEND);
+		if (iResult == SOCKET_ERROR) {
+			fatal_error("shutdown failed", dstSock);
+		}
+		closesocket(dstSock);
 
 	ShutDownClient:
 		// shutdown the connection since we're done
