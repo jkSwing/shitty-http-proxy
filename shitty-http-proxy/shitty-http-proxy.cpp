@@ -79,6 +79,22 @@ void parse_line(HttpMsg &meta, char line[])
 	if (buf == "GET" || buf == "POST")
 	{
 		meta.method = buf;
+		char ch = '\0';
+		int leftSlashCnt = 2;
+		do
+		{
+			ch = is.peek();
+			if (ch == '/' && leftSlashCnt == 0)
+			{
+				break;
+			}
+			else
+			{
+				if (ch == '/')
+					--leftSlashCnt;
+				is.get();
+			}
+		} while (true);
 		is >> meta.path;
 	}
 	else if (buf == "Host")
@@ -119,7 +135,7 @@ int build_request(char request[], const HttpMsg &meta)
 	std::string format = "%s %s HTTP/1.0\r\n"
 		"Host: %s\r\n"
 		"Connection: close\r\n"
-		"Proxy-Connection: close\r\n"
+		// "Proxy-Connection: close\r\n"
 		"User-Agent: %s\r\n";
 		// "%s";	// meta.others has "\r\n"
 	if (meta.content_length > 0)
@@ -176,6 +192,11 @@ SOCKET open_listen_socket(const char *port)
 	if (ListenSocket == INVALID_SOCKET)
 	{
 		fatal_error("open listening socket failed", INVALID_SOCKET, result);
+	}
+	int option = 1;
+	if(setsockopt(ListenSocket, SOL_SOCKET, (SO_REUSEADDR), (char*)&option, sizeof(option)))
+	{
+		fatal_error("setsockopt failed!", ListenSocket);
 	}
 
 	iResult = listen(ListenSocket, SOMAXCONN);
@@ -277,6 +298,7 @@ int main(int argc, char **argv)
 
 		// Receive until the peer shuts down the connection
 		SockBuffer shit_buffer(ClientSocket);
+
 		HttpMsg meta;
 		char recvbuf[DEFAULT_BUFLEN] = { 0 };
 
@@ -301,62 +323,61 @@ int main(int argc, char **argv)
 			meta.content = recvbuf;
 		}
 
-		char request[DEFAULT_BUFLEN] = {0};
+		char request[DEFAULT_BUFLEN] = { 0 };
 		iResult = build_request(request, meta);
-		if (iResult == BAD_REQUEST)
+		printf("\n===request===\n%s", request);
+
+
+		if (iResult != BAD_REQUEST)
 		{
-			goto ShutDownClient;
-		}
-		printf("===request===\n%s", request);
+			// connect to the destination
+			char response[DEFAULT_RESPONSE_LEN] = { 0 };
+			SOCKET dstSock = connect_to_destination(meta);
+			int readLen = 0;
 
-		
-		
-
-		// connect to the destination
-		char response[DEFAULT_RESPONSE_LEN] = { 0 };
-		SOCKET dstSock = connect_to_destination(meta);
-		int readLen = 0;
-
-		iResult = send(dstSock, request, sizeof(request), 0);
-		while (true)
-		{
-			int iResult;
-			iResult = recv(dstSock, response + readLen, DEFAULT_RESPONSE_LEN - readLen, 0);
-			if (iResult > 0)
+			iResult = send(dstSock, request, strlen(request), 0);
+			while (true)
 			{
-				readLen += iResult;
+				int iResult;
+				iResult = recv(dstSock, response + readLen, DEFAULT_RESPONSE_LEN - readLen, 0);
+				if (iResult > 0)
+				{
+					readLen += iResult;
+				}
+				else
+				{
+					break;
+				}
 			}
-			else
+			printf("\n===response===\n%s", response);
+
+
+			// send the data back to client
+			iResult = send(ClientSocket, response, readLen, 0);
+			if (iResult < 0)
 			{
-				break;
+				printf("[Error] send to client error\n");
 			}
+
+			// send a constant content
+			// char buff[] = "HTTP/1.0 200 OK\r\n"
+			// 	"Server: Apache Tomcat/5.0.12\r\n"
+			// 	"Content-Type: text/html;charset=UTF-8\r\n"
+			// 	"Content-Length: 17\r\n"
+			// 	"\r\n"
+			// 	"<h1>REPLIED</h1>";
+			// iResult = send(ClientSocket, buff, sizeof(buff), 0);
+			// if (iResult < 0)
+			// {
+			// 	fatal_error("send failed", ClientSocket);
+			// }
+
+			iResult = shutdown(dstSock, SD_SEND);
+			if (iResult == SOCKET_ERROR) {
+				fatal_error("shutdown failed", dstSock);
+			}
+			closesocket(dstSock);
 		}
-		printf("===respons===\n%s", response);
-
-
-		// send the data back to client
-		send(ClientSocket, response, sizeof(response), 0);
-
-		// send a constant content
-		// char buff[] = "HTTP/1.0 200 OK\r\n"
-		// 	"Server: Apache Tomcat/5.0.12\r\n"
-		// 	"Content-Type: text/html;charset=UTF-8\r\n"
-		// 	"Content-Length: 17\r\n"
-		// 	"\r\n"
-		// 	"<h1>REPLIED</h1>";
-		// iResult = send(ClientSocket, buff, sizeof(buff), 0);
-		// if (iResult < 0)
-		// {
-		// 	fatal_error("send failed", ClientSocket);
-		// }
-
-		iResult = shutdown(dstSock, SD_SEND);
-		if (iResult == SOCKET_ERROR) {
-			fatal_error("shutdown failed", dstSock);
-		}
-		closesocket(dstSock);
-
-	ShutDownClient:
 		// shutdown the connection since we're done
 		iResult = shutdown(ClientSocket, SD_SEND);
 		if (iResult == SOCKET_ERROR) {
